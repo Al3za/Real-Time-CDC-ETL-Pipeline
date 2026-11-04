@@ -1,4 +1,4 @@
-# Real-time Cdc Etl Pipeline With Spark, Kafka & Debeziu 
+# Real-time Cdc Etl Pipeline With Spark, Kafka & Debezium 
 
 ## Overview
 
