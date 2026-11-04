@@ -27,7 +27,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-  kafka-connect: # il ponte. e' un runtime. Espone REST API che ci permette di "registrare connector" tramite endpoint: (curl.exe -X POST http://localhost:8083/connectors), dove in questo endpoint definiamo il db e tabella debezium deve rilevare i cambiamenti dei dati
+  kafka-connect: # Questo e' debezium runtime. Espone REST API che ci permette di "registrare connector" tramite endpoint: (curl.exe -X POST http://localhost:8083/connectors). In questo endpoint definiamo il db e tabella, dove debezium deve rilevare i cambiamenti dei dati 
     image: debezium/connect:2.5
     depends_on:
       - kafka
@@ -48,13 +48,3 @@ services:
 # e in kafka-connect, accediamo agli endpoint(connectors, curl.exe -X POST http://localhost:8083/connectors) dove tramite post body all endpoint connetcors:(-H "Content-Type: application/json" ` -d @config/debezium/postgres-employee.json),
 # nel body passiamo il file postgres-employee.js dove sono descritti le connessioni con il nostro db postgres, e quindi abilitare CDC correttamente.
 
-# 3ee6a3c5438d
-
-# docker exec -it docker-kafka-1 kafka-topics --bootstrap-server kafka:9092 --list  # checks if there are initial topics, otherwise it can throw errors
-
-
-
-
-# KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092 
-      # KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT

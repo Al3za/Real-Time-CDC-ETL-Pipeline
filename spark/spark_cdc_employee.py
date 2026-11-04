@@ -65,7 +65,9 @@ from pyspark.sql.functions import from_json, col, to_timestamp, expr, lit
 from pyspark.sql.types import StructType, StructField, StringType, LongType
 
 # Estarai solo i dati che ci servono da payload
-# Il messagio di kafka e' un 'mess'. qui estraiamo i dati che ci servono dal messagio kafka.
+# Il messagio di kafka e' un 'mess'. qui estraiamo i dati che ci servono dal messagio kafka e diciamo
+# a spark di sistemare questi dati del payload in colonne e values come descritto qui.
+# "Stiamo dichiarando a Spark come interpretare il JSON che arriva dal Kafka message"
 # Ricordiamoci di droppare le colonne op,
 schema = StructType([
     StructField("payload", StructType([ # res #payload" (nel message kafka)
@@ -93,7 +95,13 @@ schema = StructType([
 ]) # same types as the sink db table, to avoid errors
 
 
-# parse the "payload" message data stored in kafka.
+# kafka message json has those key (and  relative values)
+# key | value | topic | partition | offset | timestamp (very longjson message)
+
+# down below in df_parsed, we only get the "value" json data, that is a object with 
+# payload/op/before/efter...key values
+
+# and parse that "payload" message data stored in kafka.
 
 df_parsed = ( # df_parsed = data cleaning with only data defined in schema
     df.selectExpr("CAST(value AS STRING) as json_str")
@@ -109,7 +117,8 @@ df_parsed = ( # df_parsed = data cleaning with only data defined in schema
 
 # df_parsed.printSchema() # check lo schema
 
-
+# here we define df_flat, that define both "before" and "after" data related to all crud operation 
+# that hapens on the employee database. This data is necessary to perform etl and sink destination db
 df_flat = df_parsed.select(
           col("data.payload.op").alias("op"), # qui attingiamo il campo "op" di debezium (insert/update/delete) topics
           col("data.payload.after.*"), # # values post-update/insert (di kafka)
@@ -141,14 +150,15 @@ valid_df = UpSert_and_Read_df.filter( # checks that valid data ("c", "u", "r"), 
     (col("email").isNotNull()) &
     (col("password")).isNotNull() &  
     (col("createdAt") > 0)
-) 
+)  # if data dont follow that structure the message stops here and etl will simply not go forward in the process
 
-print('valid_df schema:', valid_df)
+# print('valid_df schema:', valid_df)
 
-# gracefully handle invalid records without blocking spark stream 
+# gracefully handle invalid records without blocking spark stream and 
 invalid_df = df_valid_json.filter(
     (~col("role").isin("ADMIN", "ENGINEER", "INTERN")) |
-    col("email").isNull() |
+    (col("email").isNull()) |
+    (col("password")).isNotNull() |
     (col("createdAt") <= 0)
 ) # data che non passa questo filtro, verra' inserito in badRecords_checkpoint file in 
   # formato parque, insieme hai json malformati di kafka
@@ -177,6 +187,7 @@ invalid_df = invalid_df.withColumn( # helpfull message you get in badRecords_che
     .start()
 )
 
+
 # FUNCTION TO WRITE BATCH TO POSTGRESQL
 def write_to_postgres(batch_df, batch_id):
 
@@ -191,14 +202,19 @@ def write_to_postgres(batch_df, batch_id):
     # delete_df.select("op", "before_id", "id").show(truncate=False)
     # print("DELETE DF COUNT:", delete_df.count())
 
+    # prepare UPSERT data for more data filtration that hapens below in "upsert_df"
     upsert_source_df = (
         insert_df
         .unionByName(update_df)
         .unionByName(snapshot_df)
     ) # Combiniamo insert + update + snapshot in un unico dataframe. cosi evitiamo code redundance
 
-    upsert_df = (
-        upsert_source_df # batch dara with where applies business logic and deduplication
+
+   # filter upsert Data before adding it in sink db. 
+   # Only ADMIN roles will be added.
+   # dropp duplicate if kafka stored same topic (same id and updated_ts) twice(It can hapens sometime)
+    upsert_df = ( 
+        upsert_source_df # 
         .filter(col("role") == "ADMIN") # Only ADMINs record for insert/update on destination db
         .withColumn("updated_ts", to_timestamp(col("updatedAt") / 1000)) # withColumn crea una colonna temporanea che possiamo usare come riferimento, come facciamo sotto
         .dropDuplicates(["id", "updated_ts"]) # si basa su payload "after" data.  
@@ -228,12 +244,13 @@ def write_to_postgres(batch_df, batch_id):
 
     # print("===== DELETE IDS =====", delete_ids)
 
-    # if delete_ids:
-    #    upsert_df = upsert_df.filter(~col("id").isin(delete_ids))
+
 
     if not upsert_rows and not delete_ids:
         return
- 
+
+    
+    # UPSERT/DELETE DATA IN SINK DB.
     if upsert_rows or delete_ids: # 
         # in upsert_df arrivano i dati di cdc_df definiti in 'query'(sotto) quando chiamiamo
         #  questa funzione write_to_postgres()
